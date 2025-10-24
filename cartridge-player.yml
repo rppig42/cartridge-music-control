@@ -1,0 +1,135 @@
+esphome:
+  name: cartridge-player-c3-http
+  friendly_name: Cartridge Player
+  comment: "NFC based cartridge player from The Stock Pot"
+  project:
+    name: "The Stock Pot.Cartridge Player"
+    version: "1.0.2"
+
+esp32:
+  board: esp32-c3-devkitm-1
+  framework:
+    type: arduino
+
+logger:
+  level: DEBUG
+
+ota:
+  platform: esphome
+
+web_server:
+  port: 80
+  auth:
+    username: admin
+    password: admin
+
+wifi:
+  ssid: Sam&RitaHouse_2.4G
+  password: abc123456
+
+  ap:
+    ssid: "Cartridge Player Hotspot"
+    password: "thestockpot"
+
+captive_portal:
+
+# HTTP Request component
+http_request:
+  timeout: 5s
+  verify_ssl: false
+
+# SPI connection for RC522
+spi:
+  clk_pin: GPIO3
+  mosi_pin: GPIO2
+  miso_pin: GPIO1
+
+# Global to track last tag detection time (for debounce)
+globals:
+  - id: last_tag_time
+    type: unsigned long
+    restore_value: no
+    initial_value: '0'
+
+output:
+  - platform: ledc
+    pin: GPIO5  # Update to the correct pin where your buzzer is connected
+    id: rtttl_out
+
+# RTTTL configuration
+rtttl:
+  output: rtttl_out
+  on_finished_playback:
+    - logger.log: 'Song ended!'
+
+# Button to manually trigger a beep
+button:
+  - platform: template
+    name: "Cartridge Player Beep"
+    id: buzzer_button
+    on_press:
+      then:
+        - rtttl.play:
+            rtttl: "two_short:d=4,o=5,b=100:16e6,16e6"
+
+# RC522 SPI Reader
+rc522_spi:
+  id: rc522_reader
+  cs_pin: GPIO4
+  update_interval: 250ms
+
+  on_tag:
+    then:
+      - lambda: |-
+          id(last_tag_time) = millis();
+      - logger.log:
+          format: "Cartridge detected: %s"
+          args: ['x.c_str()']
+      - text_sensor.template.publish:
+          id: last_uid
+          state: !lambda 'return x;'
+      - binary_sensor.template.publish:
+          id: tag_present
+          state: true
+      - http_request.post:
+          url: http://192.168.31.192:5566
+          request_headers:
+            Content-Type: application/json
+          json:
+            event: "nfc_card_inserted"
+            uid: !lambda 'return x;'
+
+  on_tag_removed:
+    then:
+      - delay: 500ms
+      - lambda: |-
+          if (millis() - id(last_tag_time) > 500) {
+            ESP_LOGI("rfid", "Cartridge removed (debounced)");
+            id(last_uid).publish_state("");
+            id(tag_present).publish_state(false);
+          }
+      - if:
+          condition:
+            lambda: 'return millis() - id(last_tag_time) > 500;'
+          then:
+            - http_request.post:
+                url: http://192.168.31.192:5566
+                request_headers:
+                  Content-Type: application/json
+                json:
+                  event: "nfc_card_removed"
+                  message: "Cartridge removed"
+
+# Current Tag UID
+text_sensor:
+  - platform: template
+    name: "Cartridge ID"
+    id: last_uid
+    update_interval: never
+    internal: false
+
+# Whether a cartridge is inserted
+binary_sensor:
+  - platform: template
+    name: "Cartridge Status"
+    id: tag_present
