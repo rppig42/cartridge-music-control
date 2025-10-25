@@ -17,6 +17,8 @@ type NFCEvent = NFCCardInsertedEvent | NFCCardRemovedEvent;
 
 // 存储当前卡片状态
 let currentCardUID: string | null = null;
+// 存储上一次播放的卡片 UID，用于避免重复播放
+let lastPlayedCardUID: string | null = null;
 
 // 播放音乐
 async function playMusic(type: string, value: string) {
@@ -50,6 +52,12 @@ async function handleCardInserted(id: string) {
   console.log(`🎵 卡片已插入 - UID: ${id}`);
   console.log(`时间: ${new Date().toLocaleString("zh-CN")}`);
   
+  // 检查是否与上一次播放的卡片相同
+  if (lastPlayedCardUID === id) {
+    console.log(`🔁 检测到重复卡片，跳过播放 (UID: ${id})`);
+    return;
+  }
+  
   // 根据 UID 查找音乐数据
   const musicItem = MusicData.find(item => item.id === id);
   
@@ -59,6 +67,9 @@ async function handleCardInserted(id: string) {
     
     // 调用 AppleScript 播放音乐
     await playMusic(musicItem.type, musicItem.value);
+    
+    // 记录本次播放的卡片 UID
+    lastPlayedCardUID = id;
   } else {
     console.log(`⚠️  未找到 UID 对应的音乐: ${id}`);
   }
@@ -68,6 +79,7 @@ async function handleCardInserted(id: string) {
 async function stopMusic() {
   try {
     console.log(`⏹️  停止播放音乐`);
+    lastPlayedCardUID = null;
     
     // 使用 AppleScript 停止 Music 应用的播放
     const command = new Deno.Command("/usr/bin/osascript", {
@@ -121,7 +133,10 @@ async function handleRequest(req: Request): Promise<Response> {
       
       // 根据事件类型处理
       if (body.event === "nfc_card_inserted") {
-        await handleCardInserted(body.uid);
+        // 异步处理，不阻塞响应
+        handleCardInserted(body.uid).catch(err => {
+          console.error("处理卡片插入事件时出错:", err);
+        });
         return new Response(
           JSON.stringify({ 
             status: "success", 
@@ -134,7 +149,10 @@ async function handleRequest(req: Request): Promise<Response> {
           }
         );
       } else if (body.event === "nfc_card_removed") {
-        await handleCardRemoved(body.message);
+        // 异步处理，不阻塞响应
+        handleCardRemoved(body.message).catch(err => {
+          console.error("处理卡片移除事件时出错:", err);
+        });
         return new Response(
           JSON.stringify({ 
             status: "success", 

@@ -12,7 +12,6 @@ esp32:
     type: arduino
 
 logger:
-  level: DEBUG
 
 ota:
   platform: esphome
